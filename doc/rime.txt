@@ -43,12 +43,16 @@ again when its sources are newer, e.g. after an update.  `:Rime build`
 builds it by hand.  Run |:checkhealth| rime to check the installation.
 
                                                                     *rime-nix*
-On NixOS nothing needs to be added to the system configuration.  On Nix,
-`make` fetches librime and rime-data from the system's nixpkgs
+On NixOS nothing needs to be added to the system configuration.  On NixOS,
+and on Nix when the system has no librime, `make` fetches librime and
+rime-data from the system's nixpkgs
 (`nix-build '<nixpkgs>'`, else `nix build nixpkgs#...`) and links them as
 lib/nix-librime and lib/nix-rime-data, which are also garbage-collector
-roots; rime_core finds them next to itself.  `make NIX=0` skips this,
-`make NIXPKGS=...` selects another package set.  Without make and a C
+roots; rime_core finds them next to itself.  `make NIX=1` forces this,
+`make NIX=0` skips it, `make NIXPKGS=...` selects another package set.
+When librime cannot be loaded, or no Rime data is found, and these links
+are missing, the plugin runs `make NIX=1` once and starts again; if that
+fails too, the error lists every path tried and why fetching failed.  Without make and a C
 compiler, the module is built with `nix-shell -p gcc gnumake` or `nix shell`.
 
 A librime or rime-data already installed (Nix profiles, usual paths) is

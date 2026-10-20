@@ -47,7 +47,9 @@ vim.keymap.set({ 'n', 'i' }, '<C-\\>', '<Plug>(rime-toggle)')
 
 不需要在 `configuration.nix`、flake 或 home-manager 中为本插件添加任何东西，照常用 `vim.pack` 安装即可。
 
-在 Nix 系统上，`make` 会从 nixpkgs 取得 librime 与 rime-data，并在插件的 `lib/` 中留下指向它们的链接 `lib/nix-librime`、`lib/nix-rime-data`。这两个链接同时是 GC root，`nix-collect-garbage` 不会删掉它们；`rime_core` 会在自己旁边找到它们。取包用的是 `nix-build '<nixpkgs>'`，也就是系统的那份 nixpkgs，它的 glibc 与系统的 Neovim 一致。如果没有 `<nixpkgs>`，则退回到 `nix build nixpkgs#…`。
+在 NixOS 上（以及在其他系统上用 Nix、但系统没有 librime 时），`make` 会从 nixpkgs 取得 librime 与 rime-data，并在插件的 `lib/` 中留下指向它们的链接 `lib/nix-librime`、`lib/nix-rime-data`。这两个链接同时是 GC root，`nix-collect-garbage` 不会删掉它们；`rime_core` 会在自己旁边找到它们。取包用的是 `nix-build '<nixpkgs>'`，也就是系统的那份 nixpkgs，它的 glibc 与系统的 Neovim 一致。如果没有 `<nixpkgs>`，则退回到 `nix build nixpkgs#…`。
+
+如果启动时 librime 加载失败，或找不到任何 Rime 数据，而这两个链接又不存在（例如模块是在这一功能加入之前编译的，或者包被 GC 掉了），插件会自动运行一次 `make NIX=1` 取包后重试。取包仍然失败时，报错会列出尝试过的每个路径以及 nix-build 的错误。
 
 NixOS 默认没有 `cc` 与 `make`。插件找不到它们时，会用 `nix-shell -p gcc gnumake`（或 `nix shell`）来运行 `make`。这一切都在后台进行，第一次需要下载时会慢一些。
 
@@ -55,7 +57,7 @@ nixpkgs 的 librime 已合入 librime-lua 插件，rime-ice 等配置可以直�
 
 | `make` 变量 | 作用 |
 | --- | --- |
-| `NIX=0` | 不从 nixpkgs 取包 |
+| `NIX=1` / `NIX=0` | 强制取包 / 不取包（默认：NixOS 上取，或系统没有 librime 时取） |
 | `NIXPKGS=…` | 换一个包集合，值是 `nix-build` 的表达式，例如 `NIXPKGS='<nixos-unstable>'` |
 
 如果系统里已经装了 librime 或 rime-data，插件会优先使用它们，查找顺序如下：

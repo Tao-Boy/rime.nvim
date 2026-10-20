@@ -209,8 +209,21 @@ end
 
 --- Rebuild the native module.
 function M.build()
-  require('rime.native').build(function(ok, msg)
-    if ok and require('rime.native').core then msg = msg .. ' (restart Neovim to load it)' end
+  local native = require('rime.native')
+  native.build(function(ok, msg, output)
+    local missing = vim.fn.filereadable('/etc/NIXOS') == 1 and native.missing_nix_links() or {}
+    if ok and #missing > 0 then
+      vim.notify('rime: could not fetch ' .. table.concat(missing, ', ') .. ' from nixpkgs:\n' .. vim.trim(output),
+        vim.log.levels.WARN)
+    end
+    if ok and native.core then
+      if engine.state == 'error' then
+        -- librime may be there now: try again.
+        engine.start()
+      else
+        msg = msg .. ' (restart Neovim to load it)'
+      end
+    end
     vim.notify('rime: ' .. msg, ok and vim.log.levels.INFO or vim.log.levels.ERROR)
   end)
 end
