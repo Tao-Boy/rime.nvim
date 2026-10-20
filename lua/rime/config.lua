@@ -7,7 +7,8 @@ M.defaults = {
   -- librime -------------------------------------------------------------
 
   --- Directory of the shared Rime data (default.yaml, schemas, dictionaries).
-  --- nil: detect /usr/share/rime-data, Homebrew, Squirrel, ...
+  --- nil: detect /usr/share/rime-data, Nix profiles, Homebrew, Squirrel,
+  --- and last the newest rime-data in /nix/store.
   ---@type string?
   shared_data_dir = nil,
   --- Directory of the user data: custom yaml files, user dictionaries and
@@ -19,7 +20,9 @@ M.defaults = {
   log_dir = vim.fn.stdpath('log') .. '/rime',
   --- Minimal level written to the log: 'info', 'warning', 'error' or 'fatal'.
   log_level = 'error',
-  --- Path of the librime shared library; nil searches the usual names.
+  --- Path of the librime shared library; nil searches the Nix profiles
+  --- (on NixOS or with a Neovim from Nix), the usual names, and last the
+  --- newest librime in /nix/store.
   ---@type string?
   librime = nil,
   --- Schema to select once Rime is up; nil keeps Rime's own choice.

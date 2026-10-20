@@ -42,6 +42,16 @@ The native module (lib/rime_core.so) is built with make on first use, and
 again when its sources are newer, e.g. after an update.  `:Rime build`
 builds it by hand.  Run |:checkhealth| rime to check the installation.
 
+                                                                    *rime-nix*
+On NixOS, install librime and rime-data with Nix, like Neovim: >nix
+    environment.systemPackages = with pkgs; [ neovim librime rime-data ];
+<
+They are found in the Nix profiles (NIX_PROFILES, ~/.nix-profile,
+/etc/profiles/per-user/$USER, /run/current-system/sw), else in /nix/store
+(e.g. when only fcitx5-rime brings them).  Without make and a C compiler,
+the module is built with `nix-shell -p gcc gnumake` or `nix shell`.  A
+Neovim that is not from Nix cannot load Nix's librime (another glibc).
+
 ==============================================================================
 3. USAGE                                                          *rime-usage*
 
@@ -128,8 +138,9 @@ ui = 'blink'    blink.cmp.  The source is registered as provider `rime`
 Options of |rime.setup()|, with their defaults:
 
 shared_data_dir (string?)               nil
-    Shared Rime data.  nil looks in $XDG_DATA_DIRS/rime-data,
-    /usr/share/rime-data, Homebrew and Squirrel.
+    Shared Rime data.  nil looks in $XDG_DATA_DIRS/rime-data, the Nix
+    profiles, /usr/share/rime-data, Homebrew and Squirrel, and last in the
+    newest rime-data of /nix/store.
 user_data_dir (string)                  stdpath('data') .. '/rime'
     User data: *.custom.yaml, user dictionaries, build/.  Keep it apart
     from a running desktop IME, whose user dictionary is locked.
@@ -137,7 +148,9 @@ log_dir (string)                        stdpath('log') .. '/rime'
 log_level (string)                      'error'
     'info', 'warning', 'error' or 'fatal'.
 librime (string?)                       nil
-    Path of the librime library; nil tries the usual names.
+    Path of the librime library.  nil tries, on NixOS or with a Neovim from
+    Nix, the Nix profiles first; then the usual names; and last the newest
+    librime of /nix/store.  See |rime-nix|.
 schema (string?)                        nil
     Schema selected once Rime is up.
 full_check (boolean)                    false
