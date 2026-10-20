@@ -32,9 +32,9 @@ HDR := src/rime/rime_api.h src/lua/lua.h src/lua/lauxlib.h src/lua/luaconf.h
 
 all: $(TARGET)
 
-$(TARGET): $(SRC) $(HDR)
+$(TARGET): $(SRC) $(HDR) Makefile
 	@mkdir -p lib
-	$(CC) $(CFLAGS) $(WARN) -std=c99 -D_GNU_SOURCE -o $@ $(SRC) $(LDFLAGS_MODULE) $(LDFLAGS)
+	$(CC) $(CFLAGS) $(WARN) -std=c99 -o $@ $(SRC) $(LDFLAGS_MODULE) $(LDFLAGS)
 
 clean:
 	rm -f lib/rime_core.so lib/rime_core.dll

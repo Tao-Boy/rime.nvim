@@ -98,6 +98,10 @@ local function create_autocmds()
   au('ColorScheme', { callback = set_highlights })
   au('VimLeavePre', {
     callback = function()
+      if engine.state == 'starting' or engine.state == 'busy' then
+        api.nvim_echo({ { 'rime: waiting for Rime to finish…' } }, false, {})
+        vim.cmd.redraw()
+      end
       engine.shutdown()
     end,
   })
@@ -119,7 +123,14 @@ function M.setup(opts)
   if package.loaded['rime.keymap'] then keymap().reset() end
   set_highlights()
   create_autocmds()
-  if config.options.preload then vim.schedule(engine.start) end
+  if config.options.preload then
+    -- With a UI only: scripts and headless instances never need Rime.
+    if #api.nvim_list_uis() > 0 then
+      vim.schedule(engine.start)
+    else
+      api.nvim_create_autocmd('UIEnter', { group = augroup, once = true, callback = vim.schedule_wrap(engine.start) })
+    end
+  end
   if config.options.enabled or was_enabled then M.enable() end
 end
 

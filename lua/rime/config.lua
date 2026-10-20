@@ -27,7 +27,7 @@ M.defaults = {
   schema = nil,
   --- Check every file for changes when deploying at startup.
   full_check = false,
-  --- Start Rime in the background when setup() runs, so that it is ready
+  --- Start Rime in the background once the UI is up, so that it is ready
   --- when first enabled.  false: start on first enable.
   preload = true,
   --- Build lib/rime_core with `make` when it is missing or out of date.

@@ -22,6 +22,10 @@
  * Only one Rime session exists; it is owned by this module.
  */
 
+#if !defined(_WIN32) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE /* RTLD_DEEPBIND, dladdr */
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -186,7 +190,8 @@ static void preload_plugins(void) {
   char *slash;
   DIR *d;
   struct dirent *ent;
-  if (!dladdr((void *)g_api->setup, &info) || !info.dli_fname) return;
+  /* g_api points into librime's data: find the file it comes from. */
+  if (!dladdr((void *)g_api, &info) || !info.dli_fname) return;
   snprintf(dir, sizeof dir, "%s", info.dli_fname);
   slash = strrchr(dir, '/');
   if (!slash) return;
@@ -588,7 +593,9 @@ static int l_ready(lua_State *L) {
   return 1;
 }
 
-/* shutdown(): wait for a running job, close the session, finalize. */
+/* shutdown(): wait for a running job, close the session, finalize.
+ * Must run before exit(): librime's static destructors wait for a running
+ * deployment anyway, but by then the objects it uses are destroyed. */
 static int l_shutdown(lua_State *L) {
   (void)L;
   join_worker();

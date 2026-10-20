@@ -24,6 +24,7 @@ M.anchor = nil
 local core = nil
 local timer = nil ---@type uv.uv_timer_t?
 local waiters = {} ---@type fun()[]
+local built = false -- tried building in this session
 local deploying = false ---@type false|table|'announced'
 
 local levels = { info = 0, warning = 1, error = 2, fatal = 3 }
@@ -141,11 +142,12 @@ function M.start(on_ready)
   if M.state ~= 'stopped' and M.state ~= 'error' then return end
 
   local opts = config.options
-  if not native.core and opts.auto_build and native.needs_build() then
+  if not native.core and not built and opts.auto_build and native.needs_build() then
     M.state = 'building'
     notify('building the native module…')
     native.build(function(ok, msg)
       M.state = 'stopped'
+      built = true
       if not ok then
         M.state = 'error'
         M.error = msg
@@ -287,11 +289,17 @@ function M.clear()
   if M.composing then M.update(false) end
 end
 
---- Commit the raw input of the composition and return it.
+--- End the composition and return its raw input (like <CR>).
 ---@return string?
 function M.commit_raw()
   if not core or not M.composing then return nil end
-  local text = core.commit()
+  local text = M.ctx and M.ctx.input
+  if text then
+    core.clear()
+  else
+    -- librime without get_input(): commit the composition as converted.
+    text = core.commit()
+  end
   M.update(false)
   return text
 end

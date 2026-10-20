@@ -119,6 +119,16 @@ test('composition is dropped when leaving insert mode', function()
   eq('', line())
 end)
 
+test("on_leave = 'commit' inserts the raw input", function()
+  require('rime.config').options.on_leave = 'commit'
+  -- <C-c> leaves Insert mode without going through Rime (or InsertLeave).
+  vim.api.nvim_set_current_line('x')
+  type('A nihao<C-c>')
+  require('rime.config').options.on_leave = 'clear'
+  eq('x nihao', line())
+  eq(false, engine.composing)
+end)
+
 test('commit text with "<" is inserted literally', function()
   -- ascii_mode makes Rime commit punctuation as is.
   engine.set_option('ascii_punct', true)
@@ -294,6 +304,21 @@ test('key latency', function()
   local per = (vim.uv.hrtime() - t0) / n / 1e3
   print(('     %.1f µs per key (process + context + preedit)'):format(per))
 
+end)
+
+test('quitting while Rime deploys does not crash', function()
+  local script = ([[
+    vim.opt.rtp:prepend(%q)
+    require('rime').setup({ user_data_dir = vim.fn.tempname(), full_check = true })
+    require('rime.engine').start()
+    vim.wait(20, function() return false end)
+    vim.cmd('qa!')
+  ]]):format(root)
+  local file = tmp .. '/quit.lua'
+  vim.fn.mkdir(tmp, 'p')
+  vim.fn.writefile(vim.split(script, '\n'), file)
+  local res = vim.system({ vim.v.progpath, '--headless', '-n', '-u', 'NONE', '-c', 'luafile ' .. file }):wait(60000)
+  eq(0, res.code, 'exit code')
 end)
 
 print(('%d/%d passed'):format(count - failures, count))
