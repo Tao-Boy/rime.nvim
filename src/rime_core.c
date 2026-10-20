@@ -44,9 +44,11 @@ typedef CRITICAL_SECTION mutex_t;
 #define mutex_unlock(m) LeaveCriticalSection(m)
 #define EXPORT __declspec(dllexport)
 #else
+#include <ctype.h>
 #include <dirent.h>
 #include <dlfcn.h>
 #include <pthread.h>
+#include <unistd.h>
 typedef pthread_t thread_t;
 typedef pthread_mutex_t mutex_t;
 #define mutex_init(m) pthread_mutex_init(m, NULL)
@@ -180,6 +182,43 @@ static const char *default_lib_names[] = {
 #endif
     NULL};
 
+#ifndef _WIN32
+/* Nix keeps every package in /nix/store/<hash>-<name>-<version>.  When
+ * librime or the Rime data are not linked into a profile (e.g. they only
+ * come with fcitx5-rime), find the newest <name> that has `sub`.  Runs on
+ * the worker thread: the store can hold many thousands of entries. */
+static int nix_store_find(const char *name, const char *sub, char *out,
+                          size_t size) {
+  DIR *d = opendir("/nix/store");
+  struct dirent *ent;
+  size_t nlen = strlen(name);
+  char best[256] = "", path[PATH_SIZE];
+  int found = 0;
+  if (!d) return 0;
+  while ((ent = readdir(d)) != NULL) {
+    const char *n = ent->d_name, *ver;
+    /* 32 characters of hash, '-', name, '-', a version starting with a
+     * digit: skips librime-lua-..., *.drv and the like. */
+    if (strlen(n) < 34 + nlen || n[32] != '-') continue;
+    if (strncmp(n + 33, name, nlen) != 0 || n[33 + nlen] != '-') continue;
+    ver = n + 34 + nlen;
+    if (!isdigit((unsigned char)*ver) || strstr(ver, ".drv")) continue;
+    snprintf(path, sizeof path, "/nix/store/%s%s", n, sub);
+    if (access(path, R_OK) != 0) continue;
+#ifdef __GLIBC__
+    if (found && strverscmp(ver, best) <= 0) continue;
+#else
+    if (found && strcmp(ver, best) <= 0) continue;
+#endif
+    snprintf(best, sizeof best, "%s", ver);
+    snprintf(out, size, "%s", path);
+    found = 1;
+  }
+  closedir(d);
+  return found;
+}
+#endif
+
 /* librime dlopen()s the plugins in <libdir>/rime-plugins when it starts.
  * Loading them first, with DLOPEN_FLAGS, makes librime reuse these
  * handles, so the plugins resolve symbols as described above. */
@@ -192,7 +231,9 @@ static void preload_plugins(void) {
   struct dirent *ent;
   /* g_api points into librime's data: find the file it comes from. */
   if (!dladdr((void *)g_api, &info) || !info.dli_fname) return;
-  snprintf(dir, sizeof dir, "%s", info.dli_fname);
+  /* Resolve symlinks (Nix profiles): plugins sit next to the real file. */
+  if (!realpath(info.dli_fname, dir))
+    snprintf(dir, sizeof dir, "%s", info.dli_fname);
   slash = strrchr(dir, '/');
   if (!slash) return;
   snprintf(slash, sizeof dir - (size_t)(slash - dir), "/rime-plugins");
@@ -232,6 +273,16 @@ static int load_librime(void) {
   } else {
     for (int i = 0; default_lib_names[i] && !lib; i++)
       lib = lib_open(default_lib_names[i]);
+#ifndef _WIN32
+#ifdef __APPLE__
+    if (!lib && nix_store_find("librime", "/lib/librime.1.dylib", g_lib_path,
+                               sizeof g_lib_path))
+#else
+    if (!lib && nix_store_find("librime", "/lib/librime.so.1", g_lib_path,
+                               sizeof g_lib_path))
+#endif
+      lib = lib_open(g_lib_path);
+#endif
   }
   if (!lib) {
 #ifdef _WIN32
@@ -284,6 +335,12 @@ static void warm_up(void) {
 /* Initialize, deploy if needed and open the session. */
 static int bring_up(int full_check) {
   RimeTraits traits = {0};
+#ifndef _WIN32
+  if (!g_shared_dir[0] &&
+      nix_store_find("rime-data", "/share/rime-data", g_shared_dir,
+                     sizeof g_shared_dir))
+    push_event("info", g_shared_dir);
+#endif
   fill_traits(&traits);
   if (!g_setup_done) {
     g_api->setup(&traits);
@@ -812,6 +869,26 @@ static int l_schemas(lua_State *L) {
   return 1;
 }
 
+/* library() -> path of the loaded librime, or nil. */
+static int l_library(lua_State *L) {
+#ifndef _WIN32
+  Dl_info info;
+  char path[PATH_SIZE];
+  if (g_api && dladdr((void *)g_api, &info) && info.dli_fname) {
+    lua_pushstring(L, realpath(info.dli_fname, path) ? path : info.dli_fname);
+    return 1;
+  }
+#else
+  char path[PATH_SIZE];
+  if (g_lib && GetModuleFileNameA((HMODULE)g_lib, path, sizeof path)) {
+    lua_pushstring(L, path);
+    return 1;
+  }
+#endif
+  lua_pushnil(L);
+  return 1;
+}
+
 /* dirs() -> { shared=, user=, sync= } as librime resolved them. */
 static int l_dirs(lua_State *L) {
   if (!usable()) return 0;
@@ -844,6 +921,7 @@ static const luaL_Reg funcs[] = {
     {"set_option", l_set_option},
     {"schemas", l_schemas},
     {"dirs", l_dirs},
+    {"library", l_library},
     {NULL, NULL},
 };
 

@@ -39,7 +39,34 @@ end
 
 local building = nil ---@type fun(ok: boolean, msg: string)[]?
 
---- Build the C module asynchronously with make.
+local function executable(name)
+  return vim.fn.executable(name) == 1
+end
+
+--- Commands that can build the module, to try in order.  Without make and
+--- a compiler (NixOS has none by default), borrow them from Nix.
+---@return string[][]
+function M.build_commands()
+  local make = vim.env.MAKE or ((is_win and executable('mingw32-make')) and 'mingw32-make' or 'make')
+  local cc = vim.env.CC or 'cc'
+  local list = {}
+  if executable(make) and (executable(cc) or executable('gcc') or executable('clang')) then
+    table.insert(list, { make })
+  end
+  if executable('nix-shell') then
+    table.insert(list, { 'nix-shell', '-p', 'gcc', 'gnumake', '--run', 'make' })
+  end
+  if executable('nix') then
+    table.insert(list, {
+      'nix', '--extra-experimental-features', 'nix-command flakes',
+      'shell', 'nixpkgs#gcc', 'nixpkgs#gnumake', 'nixpkgs#coreutils', '--command', 'make',
+    })
+  end
+  if #list == 0 then table.insert(list, { make }) end
+  return list
+end
+
+--- Build the C module asynchronously.
 ---@param on_done? fun(ok: boolean, msg: string)
 function M.build(on_done)
   if building then
@@ -47,26 +74,36 @@ function M.build(on_done)
     return
   end
   building = { on_done }
-  local make = vim.env.MAKE or ((is_win and vim.fn.executable('mingw32-make') == 1) and 'mingw32-make' or 'make')
-  local ok, err = pcall(vim.system, { make }, { cwd = M.root, text = true }, function(res)
+  local commands = M.build_commands()
+  local errors = {}
+
+  local function finish(success, msg)
     local callbacks = building or {}
     building = nil
-    local success = res.code == 0
-    local msg = success and 'built ' .. M.library
-      or ('build failed (%s exited with %d):\n%s%s'):format(make, res.code, res.stdout or '', res.stderr or '')
     vim.schedule(function()
       for _, cb in ipairs(callbacks) do
         cb(success, msg)
       end
     end)
-  end)
-  if not ok then
-    local callbacks = building
-    building = nil
-    for _, cb in ipairs(callbacks) do
-      cb(false, ('cannot run %s: %s'):format(make, err))
+  end
+
+  local function try(i)
+    local cmd = commands[i]
+    if not cmd then return finish(false, 'build failed:\n' .. table.concat(errors, '\n')) end
+    local name = table.concat(cmd, ' ')
+    local ok, err = pcall(vim.system, cmd, { cwd = M.root, text = true }, function(res)
+      if res.code == 0 then return finish(true, 'built ' .. M.library) end
+      table.insert(errors, ('%s exited with %d:\n%s%s'):format(name, res.code, res.stdout or '', res.stderr or ''))
+      vim.schedule(function()
+        try(i + 1)
+      end)
+    end)
+    if not ok then
+      table.insert(errors, ('cannot run %s: %s'):format(name, err))
+      try(i + 1)
     end
   end
+  try(1)
 end
 
 return M

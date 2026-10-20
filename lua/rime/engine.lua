@@ -41,6 +41,64 @@ local function ui()
   return require('rime.ui')
 end
 
+--- Whether this is a Nix system (NixOS, nix-darwin, Nix on another OS).
+local function is_nix()
+  return vim.uv.fs_stat('/nix/store') ~= nil
+end
+
+--- Nix profiles, most specific first: the user's profiles, then the
+--- system's.  Packages of `environment.systemPackages`, `home.packages`
+--- or `nix profile install` are linked into one of them.
+local function nix_profiles()
+  local list, seen = {}, {}
+  local function add(p)
+    if p and p ~= '' and not seen[p] then
+      seen[p] = true
+      table.insert(list, p)
+    end
+  end
+  -- NIX_PROFILES lists them from the least to the most specific.
+  local env = vim.split(vim.env.NIX_PROFILES or '', '%s+', { trimempty = true })
+  for i = #env, 1, -1 do
+    add(env[i])
+  end
+  local home = vim.uv.os_homedir() or vim.env.HOME
+  local user = vim.env.USER or vim.uv.os_get_passwd().username
+  add(home .. '/.nix-profile')
+  add((vim.env.XDG_STATE_HOME or home .. '/.local/state') .. '/nix/profile')
+  add('/etc/profiles/per-user/' .. user)
+  add('/run/current-system/sw')
+  add('/nix/var/nix/profiles/default')
+  return list
+end
+
+--- Whether librime should come from Nix first: on NixOS, or when Neovim
+--- itself is from Nix.  A Neovim of another distribution cannot load
+--- Nix's librime (built against Nix's glibc), so there the system's
+--- librime goes first.
+local function prefer_nix_librime()
+  if vim.uv.fs_stat('/etc/NIXOS') then return true end
+  local exe = vim.uv.fs_realpath(vim.v.progpath) or vim.v.progpath
+  return vim.startswith(exe, '/nix/store/')
+end
+
+--- librime from a Nix profile; nil lets the C module try the usual names
+--- and then the newest librime in /nix/store.
+local function librime_path()
+  local lib = config.options.librime
+  if lib then return vim.fs.normalize(lib) end
+  if not is_nix() or not prefer_nix_librime() then return nil end
+  local names = vim.fn.has('mac') == 1 and { 'librime.1.dylib', 'librime.dylib' } or { 'librime.so.1', 'librime.so' }
+  for _, profile in ipairs(nix_profiles()) do
+    for _, name in ipairs(names) do
+      local path = profile .. '/lib/' .. name
+      if vim.uv.fs_stat(path) then return path end
+    end
+  end
+  return nil
+end
+M.librime_path = librime_path
+
 --- Shared data directory: the configured one, or the first that exists.
 local function shared_data_dir()
   local dir = config.options.shared_data_dir
@@ -49,11 +107,15 @@ local function shared_data_dir()
   for _, d in ipairs(vim.split(vim.env.XDG_DATA_DIRS or '/usr/local/share:/usr/share', ':', { trimempty = true })) do
     table.insert(candidates, d .. '/rime-data')
   end
+  if is_nix() then
+    for _, profile in ipairs(nix_profiles()) do
+      table.insert(candidates, profile .. '/share/rime-data')
+    end
+  end
   vim.list_extend(candidates, {
     '/opt/homebrew/share/rime-data',
     '/usr/local/share/rime-data',
     '/usr/share/rime-data',
-    '/run/current-system/sw/share/rime-data',
     '/Library/Input Methods/Squirrel.app/Contents/SharedSupport',
   })
   for _, d in ipairs(candidates) do
@@ -62,6 +124,7 @@ local function shared_data_dir()
   return nil
 end
 M.shared_data_dir = shared_data_dir
+M.is_nix = is_nix
 
 local function flush_waiters()
   local list = waiters
@@ -95,6 +158,11 @@ local function handle_event(kind, value)
     emit('RimeOption', { kind = kind, value = value })
     require('rime.mode').changed()
   elseif kind == 'error' then
+    if value:find('GLIBC', 1, true) and value:find('/nix/store', 1, true) then
+      -- Nix on another distribution: librime from Nix needs Nix's glibc.
+      value = value .. '\nlibrime from Nix only loads into a Neovim from Nix: install both with Nix, or'
+        .. ' use the librime of your distribution (set librime = path)'
+    end
     notify(value, vim.log.levels.ERROR)
   elseif kind == 'warning' then
     notify(value, vim.log.levels.WARN)
@@ -169,13 +237,14 @@ function M.start(on_ready)
   core = c
 
   local shared = shared_data_dir()
-  if not shared then
+  -- On Nix the C module still looks for rime-data in /nix/store.
+  if not shared and not is_nix() then
     notify('no shared Rime data found; set shared_data_dir', vim.log.levels.WARN)
   end
   vim.fn.mkdir(opts.user_data_dir, 'p')
   vim.fn.mkdir(opts.log_dir, 'p')
   local ok, start_err = core.start({
-    librime = opts.librime,
+    librime = librime_path(),
     shared_data_dir = shared,
     user_data_dir = vim.fs.normalize(opts.user_data_dir),
     log_dir = vim.fs.normalize(opts.log_dir),

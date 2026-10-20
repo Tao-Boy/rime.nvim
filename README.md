@@ -22,6 +22,7 @@
 | Debian / Ubuntu | `sudo apt install librime1t64 rime-data-luna-pinyin build-essential`（旧版本为 `librime1`；用 rime-ice 另装 `librime-plugin-lua`） |
 | Arch Linux | `sudo pacman -S librime rime-luna-pinyin base-devel` |
 | macOS | 安装[鼠须管](https://rime.im/download/)（插件会使用它自带的 librime 与数据），或 `brew install librime` 并自备数据 |
+| NixOS / Nix | 见下文 [NixOS](#nixos) |
 
 也可以不装系统的 Rime 数据，把 rime-ice 等完整配置放进用户目录（见下文 `user_data_dir`）。
 
@@ -41,6 +42,37 @@ vim.keymap.set({ 'n', 'i' }, '<C-\\>', '<Plug>(rime-toggle)')
 ```
 
 第一次进入插入模式（或 `preload = true` 时启动后）插件会在后台执行 `make` 编译 `lib/rime_core.so`，编译和首次部署期间按键照常输入英文，就绪后自动生效。插件更新后源文件比库新，下次启动会自动重新编译；也可以随时运行 `:Rime build`。
+
+### NixOS
+
+把 librime 与 Rime 数据装进系统或用户环境即可，Neovim 也应来自 nixpkgs：
+
+```nix
+# configuration.nix；home-manager 中写在 home.packages
+environment.systemPackages = with pkgs; [ neovim librime rime-data ];
+```
+
+nixpkgs 的 librime 已合入 librime-lua 插件，rime-ice 等配置可以直接使用。插件按以下顺序查找：
+
+1. 配置中的 `librime`、`shared_data_dir`；
+2. Nix profile 中的 `lib/librime.so.1` 与 `share/rime-data`：`NIX_PROFILES`、`~/.nix-profile`、`~/.local/state/nix/profile`、`/etc/profiles/per-user/$USER`（home-manager）、`/run/current-system/sw`；
+3. 常规的库名与目录；
+4. `/nix/store` 中版本最新的 `librime-*` 与 `rime-data-*`，例如只装了 fcitx5-rime、librime 没有链接进任何 profile 时。这一步在后台线程中进行，不阻塞编辑器。
+
+NixOS 默认没有 `cc` 与 `make`。插件在找不到它们时会用 `nix-shell -p gcc gnumake`（或 `nix shell nixpkgs#gcc nixpkgs#gnumake`）编译原生模块，第一次可能要下载编译器，同样在后台进行。
+
+想完全固定路径时，可以在 Nix 生成的配置里直接写 store 路径，例如 home-manager：
+
+```nix
+programs.neovim.extraLuaConfig = ''
+  require('rime').setup({
+    librime = '${pkgs.librime}/lib/librime.so.1',
+    shared_data_dir = '${pkgs.rime-data}/share/rime-data',
+  })
+'';
+```
+
+在其他发行版上使用 Nix 时，Neovim 与 librime 要么都来自 Nix，要么都来自发行版：Nix 的 librime 依赖 Nix 的 glibc，无法加载进发行版的 Neovim。插件只在 NixOS 上、或 Neovim 本身来自 Nix 时才优先使用 Nix 的 librime。
 
 ### lazy.nvim
 
@@ -168,11 +200,11 @@ sources = { providers = { rime = { name = 'Rime', module = 'rime.blink' } } }
 
 ```lua
 require('rime').setup({
-  shared_data_dir = nil,  -- 共享数据目录；nil 自动查找 /usr/share/rime-data、Homebrew、鼠须管……
+  shared_data_dir = nil,  -- 共享数据目录；nil 自动查找 /usr/share/rime-data、Nix profile、Homebrew、鼠须管……
   user_data_dir = vim.fn.stdpath('data') .. '/rime',  -- 用户目录：custom.yaml、用户词典、build/
   log_dir = vim.fn.stdpath('log') .. '/rime',
   log_level = 'error',    -- 'info' | 'warning' | 'error' | 'fatal'
-  librime = nil,          -- librime 动态库路径；nil 按常见名字查找
+  librime = nil,          -- librime 动态库路径；nil 按常见名字查找（Nix 见上文）
   schema = nil,           -- 启动后选择的方案；nil 用 Rime 自己的选择
   full_check = false,     -- 启动部署时检查所有文件
   preload = true,         -- 界面启动后就在后台启动 Rime（无界面的实例不启动）
@@ -273,7 +305,7 @@ rime.deploy() / rime.sync() / rime.build()
 
 - 只支持插入/替换模式，还不支持命令行模式。
 - 部署（首次使用或修改配置后编译词典）进行中退出 Neovim 时，会等待部署完成再退出：librime 无法中途取消部署。
-- 在 Linux 上开发和测试。macOS 的编译选项与库、数据路径已经处理，但未在真机上测试；Windows 未经测试：`Makefile` 有 MinGW 分支（链接 `lua51`），需要自行提供 librime 的 `rime.dll`。
+- 在 Linux 上开发和测试（包括 nixpkgs 的 Neovim 与 librime）。macOS 的编译选项与库、数据路径已经处理，但未在真机上测试；Windows 未经测试：`Makefile` 有 MinGW 分支（链接 `lua51`），需要自行提供 librime 的 `rime.dll`。
 
 ## 开发
 

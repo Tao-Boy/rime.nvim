@@ -20,12 +20,15 @@ function M.check()
       health.ok('native module: ' .. native.library)
     end
   else
-    local cc = vim.env.CC or 'cc'
-    if vim.fn.executable('make') == 1 and vim.fn.executable(cc) == 1 then
-      health.warn('native module not built yet; it is built on first use', { 'Or run :Rime build' })
+    local cmd = native.build_commands()[1]
+    if vim.fn.executable(cmd[1]) == 1 then
+      health.warn('native module not built yet; it is built on first use with `' .. table.concat(cmd, ' ') .. '`', {
+        'Or run :Rime build',
+      })
     else
       health.error('native module missing and `make`/a C compiler not found', {
         'Install make and a C compiler, then run :Rime build',
+        'On NixOS: add gcc and gnumake to your packages, or keep nix-shell available',
       })
     end
   end
@@ -39,12 +42,25 @@ function M.check()
   end
 
   health.start('Rime')
-  local shared = engine.shared_data_dir()
-  if shared then
+  local running = engine.ready() and core
+  local library = running and core.library and core.library()
+  if library then
+    health.ok('librime: ' .. library)
+  elseif engine.librime_path() then
+    health.info('librime: ' .. engine.librime_path())
+  elseif engine.is_nix() then
+    health.info('librime: not in a Nix profile, looked up in /nix/store when Rime starts')
+  end
+  local dirs = running and core.dirs() or nil
+  local shared = dirs and dirs.shared or engine.shared_data_dir()
+  if shared and shared ~= '' then
     health.ok('shared data: ' .. shared)
+  elseif engine.is_nix() and not running then
+    health.info('shared data: not in a Nix profile, looked up in /nix/store when Rime starts')
   else
     health.error('no shared Rime data found', {
       'Install rime-data (e.g. rime-data-luna-pinyin, rime-prelude, rime-essay) or a configuration such as rime-ice',
+      'On Nix: add pkgs.rime-data to environment.systemPackages or home.packages',
       'or set shared_data_dir',
     })
   end

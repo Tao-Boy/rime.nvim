@@ -25,3 +25,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: make
+
+  # Neovim, librime and rime-data from nixpkgs, not linked into a profile:
+  # exercises the /nix/store lookup.
+  test-nix:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - run: >
+          nix shell nixpkgs#neovim-unwrapped nixpkgs#librime nixpkgs#rime-data
+          nixpkgs#gcc nixpkgs#gnumake --command bash -c 'make && make test'
