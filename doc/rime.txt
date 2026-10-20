@@ -1,0 +1,210 @@
+*rime.txt*  Rime input method for Neovim
+
+==============================================================================
+CONTENTS                                                       *rime-contents*
+
+  1. Introduction ............................................ |rime-intro|
+  2. Setup ................................................... |rime-setup|
+  3. Usage ................................................... |rime-usage|
+  4. Probes .................................................. |rime-probes|
+  5. Candidate menu .......................................... |rime-menu|
+  6. Configuration ........................................... |rime-config|
+  7. Lua API ................................................. |rime-api|
+  8. Events and highlights ................................... |rime-events|
+
+==============================================================================
+1. INTRODUCTION                                                   *rime-intro*
+
+rime.nvim types Chinese with Rime (https://rime.im) in Insert and Replace
+mode.  A Lua C module binds librime, which it loads at runtime: building the
+module only needs a C compiler and make.
+
+Loading librime, deploying, syncing the user dictionary and switching schema
+run on a worker thread.  Keys are processed synchronously, in about 0.1 ms,
+and the committed text is inserted like typed text.  The preedit is drawn as
+inline virtual text, so the buffer does not change while composing.
+
+Requirements: Neovim 0.11+ (0.12 for |vim.pack|), librime and Rime data, a C
+compiler and make.
+
+==============================================================================
+2. SETUP                                                          *rime-setup*
+
+With |vim.pack|: >lua
+    vim.pack.add({ 'https://github.com/Tao-Boy/rime.nvim' })
+    require('rime').setup({
+      schema = 'luna_pinyin_simp',
+      probes = { 'code', 'code_block', 'math', 'after_ascii', 'uppercase' },
+    })
+    vim.keymap.set({ 'n', 'i' }, '<C-\>', '<Plug>(rime-toggle)')
+<
+The native module (lib/rime_core.so) is built with make on first use, and
+again when its sources are newer, e.g. after an update.  `:Rime build`
+builds it by hand.  Run |:checkhealth| rime to check the installation.
+
+==============================================================================
+3. USAGE                                                          *rime-usage*
+
+                                        *<Plug>(rime-toggle)* *<Plug>(rime-ascii)*
+<Plug>(rime-toggle)     Toggle Chinese input (Normal and Insert mode).
+<Plug>(rime-ascii)      Toggle Rime's own ASCII mode.
+
+While composing, letters go to Rime, <Space> and <C-y> commit the
+highlighted candidate, digits select one, <CR> commits the raw input,
+<Esc> and <C-e> clear the input, <Up>/<Down>/<C-p>/<C-n> move the
+highlight, and paging follows the schema (-, =, <PageUp>, <PageDown>, ...).
+Outside a composition these keys keep their usual meaning.  See
+|rime-config-keys|.
+
+The composition is dropped when leaving Insert mode, the buffer or the
+window, and when the cursor moves away from it.
+
+                                                                       *:Rime*
+:Rime [toggle]          Toggle Chinese input.
+:Rime enable            Enable it.
+:Rime disable           Disable it: unmap the keys and restore the mappings
+                        they replaced.
+:Rime ascii             Toggle Rime's ASCII mode.
+:Rime schema [{id}]     Select a schema; without {id}, with |vim.ui.select()|.
+:Rime deploy            Redeploy, after changing the yaml configuration.
+:Rime sync              Sync the user data.
+:Rime build             Rebuild the native module (restart to load it).
+:Rime status            Show the state, schema and mode.
+
+==============================================================================
+4. PROBES                                                        *rime-probes*
+
+Probes decide, from the text around the cursor, whether a key is typed as
+ASCII instead of going to Rime.  They run when no composition is in
+progress, in the order of the `probes` option.  A probe returns:
+
+  true or 'ascii'   type the key as ASCII
+  'rime'            send it to Rime, without asking the remaining probes
+  nil or false      let the next probe decide; Rime when none decides
+
+Built-in probes, by name:
+
+  code              in source code, outside comments and strings (using
+                    tree-sitter highlighting, or syntax); string delimiters
+                    are ASCII inside strings too.  Not in `prose_filetypes`.
+  code_block        in code blocks and inline code of prose (markdown
+                    fences, `code`, injected languages)
+  math              in TeX math (vimtex, tree-sitter or syntax)
+  tex_command       after a TeX command such as \alpha or in \begin{...}
+  after_ascii       after an ASCII letter, optionally followed by digits and
+                    punctuation
+  space_after_ascii after ASCII text and a space
+  uppercase         typing an uppercase letter
+  punct_after_ascii typing punctuation right after an ASCII character
+  line_start        only whitespace before the cursor
+
+A probe can be any function of a context:
+                                                          *rime-probe-context*
+  buf, win          buffer and window
+  row, col          0-based cursor line and byte column
+  line, before      the cursor line, and its text before the cursor
+  key               the character typed; nil when only the mode is asked
+  filetype          'filetype' of the buffer
+  ctx:captures()    tree-sitter captures at the cursor, nil without
+                    tree-sitter highlighting
+  ctx:syntax()      syntax group names at the cursor
+
+A probe that throws an error is reported once and skipped.
+
+==============================================================================
+5. CANDIDATE MENU                                                  *rime-menu*
+
+ui = 'native'   The built-in popup menu |ins-completion-menu|.  Items
+                insert nothing, moving through them leaves the buffer alone.
+ui = 'blink'    blink.cmp.  The source is registered as provider `rime`
+                and shown alone while composing; it does not need to be in
+                `sources.default`.  Moving the selection with blink.cmp's
+                keys is followed by Rime, and accepting an item commits it
+                through Rime.
+
+==============================================================================
+6. CONFIGURATION                                                *rime-config*
+
+Options of |rime.setup()|, with their defaults:
+
+shared_data_dir (string?)               nil
+    Shared Rime data.  nil looks in $XDG_DATA_DIRS/rime-data,
+    /usr/share/rime-data, Homebrew and Squirrel.
+user_data_dir (string)                  stdpath('data') .. '/rime'
+    User data: *.custom.yaml, user dictionaries, build/.  Keep it apart
+    from a running desktop IME, whose user dictionary is locked.
+log_dir (string)                        stdpath('log') .. '/rime'
+log_level (string)                      'error'
+    'info', 'warning', 'error' or 'fatal'.
+librime (string?)                       nil
+    Path of the librime library; nil tries the usual names.
+schema (string?)                        nil
+    Schema selected once Rime is up.
+full_check (boolean)                    false
+preload (boolean)                       true
+    Start Rime in the background once a UI is attached; false: on first
+    enable.
+auto_build (boolean)                    true
+enabled (boolean)                       false
+    Enable Chinese input at startup.
+filter (function)
+    fun(buf): boolean, buffers to attach to.  Default: not terminals.
+probes (list)                           {}
+    See |rime-probes|.
+prose_filetypes (list)
+    Filetypes where the `code` probe does not apply.
+                                                            *rime-config-keys*
+keys (table)
+    Keys sent to Rime while composing, { [vim key] = 'Rime key' }.  A Rime
+    key is an X11 key name with optional modifiers: 'BackSpace',
+    'Shift+Tab', 'Control+Return'.  false leaves a key alone.  Printable
+    ASCII always goes to Rime.
+nowait (boolean)                        true
+    Map with <nowait>.
+on_leave (string)                       'clear'
+    'clear' drops an unfinished composition when leaving Insert mode,
+    'commit' inserts its raw input.
+ui (string)                             'native'
+    'native' or 'blink', see |rime-menu|.
+preedit (string|false)                  'preedit'
+    Inline text: 'preedit', 'input', 'preview' or false.
+native.format (function)
+    fun(label, cand): string, the label of a menu item.
+blink.provider (string)                 'rime'
+status (table)
+    Labels of |rime.status()|: off, loading, zh, en, ascii.
+mode_events (boolean)                   false
+    Recompute the mode as the cursor moves, for `User RimeModeChanged`.
+
+==============================================================================
+7. LUA API                                                          *rime-api*
+
+require('rime').setup({opts})                                  *rime.setup()*
+require('rime').enable()                                      *rime.enable()*
+require('rime').disable()                                    *rime.disable()*
+require('rime').toggle()                                      *rime.toggle()*
+require('rime').is_enabled()                              *rime.is_enabled()*
+require('rime').toggle_ascii()                          *rime.toggle_ascii()*
+require('rime').mode()                                          *rime.mode()*
+    'off', 'loading', 'ascii', 'en' (a probe makes the cursor ASCII) or
+    'zh'.  Cached, cheap enough for a statusline.
+require('rime').status()                                      *rime.status()*
+    Label of the mode, from the `status` option.
+require('rime').select_schema([{id}])                  *rime.select_schema()*
+require('rime').schemas()                                    *rime.schemas()*
+require('rime').deploy()                                      *rime.deploy()*
+require('rime').sync()                                          *rime.sync()*
+require('rime').build()                                        *rime.build()*
+
+==============================================================================
+8. EVENTS AND HIGHLIGHTS                                         *rime-events*
+
+User RimeReady          Rime is up.
+User RimeModeChanged    The mode changed; data = { mode, previous }.
+User RimeOption         A schema or option changed; data = { kind, value }.
+
+                                                    *hl-RimePreedit* *hl-RimeLabel*
+RimePreedit             Inline preedit (links to Underlined).
+RimeLabel               Candidate labels in blink.cmp (links to Number).
+
+ vim:tw=78:ts=8:ft=help:norl:
