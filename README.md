@@ -45,34 +45,28 @@ vim.keymap.set({ 'n', 'i' }, '<C-\\>', '<Plug>(rime-toggle)')
 
 ### NixOS
 
-把 librime 与 Rime 数据装进系统或用户环境即可，Neovim 也应来自 nixpkgs：
+不需要在 `configuration.nix`、flake 或 home-manager 中为本插件添加任何东西，照常用 `vim.pack` 安装即可。
 
-```nix
-# configuration.nix；home-manager 中写在 home.packages
-environment.systemPackages = with pkgs; [ neovim librime rime-data ];
-```
+在 Nix 系统上，`make` 会从 nixpkgs 取得 librime 与 rime-data，并在插件的 `lib/` 中留下指向它们的链接 `lib/nix-librime`、`lib/nix-rime-data`。这两个链接同时是 GC root，`nix-collect-garbage` 不会删掉它们；`rime_core` 会在自己旁边找到它们。取包用的是 `nix-build '<nixpkgs>'`，也就是系统的那份 nixpkgs，它的 glibc 与系统的 Neovim 一致。如果没有 `<nixpkgs>`，则退回到 `nix build nixpkgs#…`。
 
-nixpkgs 的 librime 已合入 librime-lua 插件，rime-ice 等配置可以直接使用。插件按以下顺序查找：
+NixOS 默认没有 `cc` 与 `make`。插件找不到它们时，会用 `nix-shell -p gcc gnumake`（或 `nix shell`）来运行 `make`。这一切都在后台进行，第一次需要下载时会慢一些。
+
+nixpkgs 的 librime 已合入 librime-lua 插件，rime-ice 等配置可以直接放进 `user_data_dir` 使用。
+
+| `make` 变量 | 作用 |
+| --- | --- |
+| `NIX=0` | 不从 nixpkgs 取包 |
+| `NIXPKGS=…` | 换一个包集合，值是 `nix-build` 的表达式，例如 `NIXPKGS='<nixos-unstable>'` |
+
+如果系统里已经装了 librime 或 rime-data，插件会优先使用它们，查找顺序如下：
 
 1. 配置中的 `librime`、`shared_data_dir`；
-2. Nix profile 中的 `lib/librime.so.1` 与 `share/rime-data`：`NIX_PROFILES`、`~/.nix-profile`、`~/.local/state/nix/profile`、`/etc/profiles/per-user/$USER`（home-manager）、`/run/current-system/sw`；
+2. Nix profile（`~/.nix-profile`、`/etc/profiles/per-user/$USER`、`/run/current-system/sw` 等）；
 3. 常规的库名与目录；
-4. `/nix/store` 中版本最新的 `librime-*` 与 `rime-data-*`，例如只装了 fcitx5-rime、librime 没有链接进任何 profile 时。这一步在后台线程中进行，不阻塞编辑器。
+4. `make` 取来的 `lib/nix-*`；
+5. `/nix/store` 中版本最新的 librime 与 rime-data。
 
-NixOS 默认没有 `cc` 与 `make`。插件在找不到它们时会用 `nix-shell -p gcc gnumake`（或 `nix shell nixpkgs#gcc nixpkgs#gnumake`）编译原生模块，第一次可能要下载编译器，同样在后台进行。
-
-想完全固定路径时，可以在 Nix 生成的配置里直接写 store 路径，例如 home-manager：
-
-```nix
-programs.neovim.extraLuaConfig = ''
-  require('rime').setup({
-    librime = '${pkgs.librime}/lib/librime.so.1',
-    shared_data_dir = '${pkgs.rime-data}/share/rime-data',
-  })
-'';
-```
-
-在其他发行版上使用 Nix 时，Neovim 与 librime 要么都来自 Nix，要么都来自发行版：Nix 的 librime 依赖 Nix 的 glibc，无法加载进发行版的 Neovim。插件只在 NixOS 上、或 Neovim 本身来自 Nix 时才优先使用 Nix 的 librime。
+在其他发行版上使用 Nix 时，Neovim 与 librime 要么都来自 Nix，要么都来自发行版：Nix 的 librime 依赖 Nix 的 glibc，无法加载进发行版的 Neovim。插件只在 NixOS 上、或 Neovim 本身来自 Nix 时，才优先使用 profile 中的 Nix librime。
 
 ### lazy.nvim
 
@@ -204,7 +198,7 @@ require('rime').setup({
   user_data_dir = vim.fn.stdpath('data') .. '/rime',  -- 用户目录：custom.yaml、用户词典、build/
   log_dir = vim.fn.stdpath('log') .. '/rime',
   log_level = 'error',    -- 'info' | 'warning' | 'error' | 'fatal'
-  librime = nil,          -- librime 动态库路径；nil 按常见名字查找（Nix 见上文）
+  librime = nil,          -- librime 动态库路径；nil 自动查找（Nix 见上文）
   schema = nil,           -- 启动后选择的方案；nil 用 Rime 自己的选择
   full_check = false,     -- 启动部署时检查所有文件
   preload = true,         -- 界面启动后就在后台启动 Rime（无界面的实例不启动）
