@@ -34,10 +34,13 @@ HDR := src/rime/rime_api.h src/lua/lua.h src/lua/lauxlib.h src/lua/luaconf.h
 # lib/nix-librime and lib/nix-rime-data link to their store paths (and
 # keep them from being garbage-collected), next to rime_core.so, which
 # looks there.  <nixpkgs> is the system's nixpkgs, whose glibc is the one
-# of the system's Neovim.  NIX=0 skips this; NIXPKGS selects another
+# of the system's Neovim.  Done on NixOS, or on Nix when the system has no
+# librime; NIX=1 forces it, NIX=0 skips it; NIXPKGS selects another
 # package set (an expression for nix-build).
 HAVE_NIX := $(if $(wildcard /nix/store),$(shell command -v nix-build >/dev/null 2>&1 && echo 1))
-NIX ?= $(if $(HAVE_NIX),1,0)
+# Nix on another system with its own librime does not need this.
+NEED_NIX := $(if $(wildcard /etc/NIXOS),1,$(shell ldconfig -p 2>/dev/null | grep -q 'librime\.so\.1' || echo 1))
+NIX ?= $(if $(and $(HAVE_NIX),$(NEED_NIX)),1,0)
 NIXPKGS ?= <nixpkgs>
 NIX_LINKS := lib/nix-librime lib/nix-rime-data
 
@@ -48,12 +51,15 @@ ifeq ($(NIX),1)
 all: $(NIX_LINKS)
 endif
 
-# A failure (offline, no channel) is not fatal: rime_core still looks in
-# the Nix profiles and in /nix/store.
+# Without <nixpkgs> in NIX_PATH, fall back to the flake registry's nixpkgs
+# (only when NIXPKGS was not chosen).  A failure (offline, ...) is not
+# fatal: rime_core still looks in the Nix profiles and in /nix/store.
+NIX_FALLBACK = $(if $(filter <nixpkgs>,$(NIXPKGS)),|| nix --extra-experimental-features 'nix-command flakes' build nixpkgs\#$* --out-link $@)
+
 lib/nix-%:
 	@mkdir -p lib
 	nix-build '$(NIXPKGS)' -A $* -o $@ --no-build-output >/dev/null \
-	  || nix --extra-experimental-features 'nix-command flakes' build nixpkgs#$* --out-link $@ \
+	  $(NIX_FALLBACK) \
 	  || echo 'warning: could not get $* from nixpkgs' >&2
 
 $(TARGET): $(SRC) $(HDR) Makefile

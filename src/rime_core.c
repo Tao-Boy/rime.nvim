@@ -59,7 +59,7 @@ typedef pthread_mutex_t mutex_t;
 
 #define MODULE_VERSION "0.1.0"
 #define PATH_SIZE 4096
-#define ERR_SIZE 512
+#define ERR_SIZE 2048
 
 typedef RimeApi *(*rime_get_api_fn)(void);
 
@@ -102,11 +102,11 @@ static int g_full_check = 0;
 /* Event queue (librime notifications and job results)                 */
 /* ------------------------------------------------------------------ */
 
-#define EVENT_MAX 128
+#define EVENT_MAX 64
 
 typedef struct {
   char type[32];
-  char value[256];
+  char value[ERR_SIZE]; /* errors list what was tried */
 } event_t;
 
 static event_t g_events[EVENT_MAX];
@@ -284,12 +284,28 @@ static void quiet_stderr(void *lib) {
 static int load_librime(void) {
   void *lib = NULL;
   rime_get_api_fn get_api;
+  /* What was tried, for the error message. */
+  char tried[ERR_SIZE] = "";
+  size_t len = 0;
+#ifdef _WIN32
+#define NOTE(path) \
+  len += (size_t)snprintf(tried + len, len < sizeof tried ? sizeof tried - len : 0, \
+                          "\n  %s: error %lu", (path), GetLastError())
+#else
+#define NOTE(path)                                                             \
+  do {                                                                         \
+    const char *e_ = dlerror();                                                \
+    if (len < sizeof tried)                                                    \
+      len += (size_t)snprintf(tried + len, sizeof tried - len, "\n  %.1000s: %.500s", \
+                              (path), e_ ? e_ : "not found");                  \
+  } while (0)
+#endif
   if (g_api) return 1;
   if (g_lib_path[0]) {
-    lib = lib_open(g_lib_path);
+    if (!(lib = lib_open(g_lib_path))) NOTE(g_lib_path);
   } else {
     for (int i = 0; default_lib_names[i] && !lib; i++)
-      lib = lib_open(default_lib_names[i]);
+      if (!(lib = lib_open(default_lib_names[i]))) NOTE(default_lib_names[i]);
 #ifndef _WIN32
 #ifdef __APPLE__
 #define LIBRIME_FILE "/lib/librime.1.dylib"
@@ -297,23 +313,31 @@ static int load_librime(void) {
 #define LIBRIME_FILE "/lib/librime.so.1"
 #endif
     /* From nixpkgs by the Makefile, else the newest one in the store. */
-    if (!lib && beside_module("nix-librime" LIBRIME_FILE, g_lib_path,
-                              sizeof g_lib_path))
-      lib = lib_open(g_lib_path);
-    if (!lib && nix_store_find("librime", LIBRIME_FILE, g_lib_path,
-                               sizeof g_lib_path))
-      lib = lib_open(g_lib_path);
+    if (!lib && access("/nix/store", F_OK) == 0) {
+      if (beside_module("nix-librime" LIBRIME_FILE, g_lib_path,
+                        sizeof g_lib_path)) {
+        if (!(lib = lib_open(g_lib_path))) NOTE(g_lib_path);
+      } else if (len < sizeof tried) {
+        len += (size_t)snprintf(tried + len, sizeof tried - len,
+                                "\n  %.1000s: missing (make fetches it on Nix)",
+                                g_lib_path);
+      }
+    }
+    if (!lib) {
+      if (nix_store_find("librime", LIBRIME_FILE, g_lib_path,
+                         sizeof g_lib_path)) {
+        if (!(lib = lib_open(g_lib_path))) NOTE(g_lib_path);
+      } else if (access("/nix/store", F_OK) == 0 && len < sizeof tried) {
+        len += (size_t)snprintf(tried + len, sizeof tried - len,
+                                "\n  /nix/store: no librime-*" LIBRIME_FILE);
+      }
+    }
 #endif
   }
+#undef NOTE
   if (!lib) {
-#ifdef _WIN32
-    snprintf(g_error, ERR_SIZE, "cannot load librime (%s): error %lu",
-             g_lib_path[0] ? g_lib_path : "rime.dll", GetLastError());
-#else
-    const char *err = dlerror();
-    snprintf(g_error, ERR_SIZE, "cannot load librime: %s",
-             err ? err : "not found");
-#endif
+    snprintf(g_error, ERR_SIZE, "cannot load librime, tried:%s", tried);
+    g_lib_path[0] = '\0';
     return 0;
   }
   get_api = (rime_get_api_fn)lib_sym(lib, "rime_get_api");
