@@ -45,28 +45,25 @@ vim.keymap.set({ 'n', 'i' }, '<C-\\>', '<Plug>(rime-toggle)')
 
 ### NixOS
 
-不需要在 `configuration.nix`、flake 或 home-manager 中为本插件添加任何东西，照常用 `vim.pack` 安装即可。
+和在其他 Linux 上一样：系统里有 librime 与 Rime 数据，插件用 `make` 正常编译（需要 `gcc`/`clang` 与 `make`）。插件不会调用 `nix-build`、`nix-shell` 等命令去下载或构建任何东西。
 
-在 NixOS 上（以及在其他系统上用 Nix、但系统没有 librime 时），`make` 会从 nixpkgs 取得 librime 与 rime-data，并在插件的 `lib/` 中留下指向它们的链接 `lib/nix-librime`、`lib/nix-rime-data`。这两个链接同时是 GC root，`nix-collect-garbage` 不会删掉它们；`rime_core` 会在自己旁边找到它们。取包用的是 `nix-build '<nixpkgs>'`，也就是系统的那份 nixpkgs，它的 glibc 与系统的 Neovim 一致。如果没有 `<nixpkgs>`，则退回到 `nix build nixpkgs#…`。
+librime 和 rime-data 来自哪里都可以：
 
-如果启动时 librime 加载失败，或找不到任何 Rime 数据，而这两个链接又不存在（例如模块是在这一功能加入之前编译的，或者包被 GC 掉了），插件会自动运行一次 `make NIX=1` 取包后重试。取包仍然失败时，报错会列出尝试过的每个路径以及 nix-build 的错误。
+- `environment.systemPackages`、home-manager 的 `home.packages` 或 `nix profile` 安装的；
+- fcitx5-rime、ibus-rime 带进 `/nix/store` 的那份；
+- 编译时 `pkg-config` 能找到的 librime：编译时会记下它的路径。
 
-NixOS 默认没有 `cc` 与 `make`。插件找不到它们时，会用 `nix-shell -p gcc gnumake`（或 `nix shell`）来运行 `make`。这一切都在后台进行，第一次需要下载时会慢一些。
-
-nixpkgs 的 librime 已合入 librime-lua 插件，rime-ice 等配置可以直接放进 `user_data_dir` 使用。
-
-| `make` 变量 | 作用 |
-| --- | --- |
-| `NIX=1` / `NIX=0` | 强制取包 / 不取包（默认：NixOS 上取，或系统没有 librime 时取） |
-| `NIXPKGS=…` | 换一个包集合，值是 `nix-build` 的表达式，例如 `NIXPKGS='<nixos-unstable>'` |
-
-如果系统里已经装了 librime 或 rime-data，插件会优先使用它们，查找顺序如下：
+查找顺序：
 
 1. 配置中的 `librime`、`shared_data_dir`；
-2. Nix profile（`~/.nix-profile`、`/etc/profiles/per-user/$USER`、`/run/current-system/sw` 等）；
+2. Nix profile：`/etc/profiles/per-user/$USER`、`~/.nix-profile`、`/run/current-system/sw` 等；
 3. 常规的库名与目录；
-4. `make` 取来的 `lib/nix-*`；
-5. `/nix/store` 中版本最新的 librime 与 rime-data。
+4. 编译时 `pkg-config` 找到的 librime；
+5. `/nix/store` 中版本最新的 librime 与 rime-data（只读扫描，在后台线程中进行）。
+
+找不到时，报错会逐行列出每个尝试过的路径和失败原因。只存在于 `/nix/store`、没有被任何 profile 引用的 librime，可能会被 `nix-collect-garbage` 删掉。
+
+nixpkgs 的 librime 已合入 librime-lua 插件，rime-ice 等配置可以直接放进 `user_data_dir` 使用。
 
 在其他发行版上使用 Nix 时，Neovim 与 librime 要么都来自 Nix，要么都来自发行版：Nix 的 librime 依赖 Nix 的 glibc，无法加载进发行版的 Neovim。插件只在 NixOS 上、或 Neovim 本身来自 Nix 时，才优先使用 profile 中的 Nix librime。
 

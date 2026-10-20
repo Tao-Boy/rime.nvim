@@ -25,11 +25,6 @@ local core = nil
 local timer = nil ---@type uv.uv_timer_t?
 local waiters = {} ---@type fun()[]
 local built = false -- tried building in this session
-local fetched = false -- tried fetching librime/rime-data from nixpkgs
-local retry_fetch = false -- librime failed to load: fetch it, start again
---- Output of make when it could not fetch librime/rime-data from nixpkgs.
----@type string?
-M.fetch_output = nil
 local deploying = false ---@type false|table|'announced'
 
 local levels = { info = 0, warning = 1, error = 2, fatal = 3 }
@@ -105,6 +100,19 @@ end
 M.librime_path = librime_path
 
 --- Shared data directory: the configured one, or the first that exists.
+--- How to make librime available, for the error when it is not found.
+local function install_hint()
+  if vim.uv.fs_stat('/etc/NIXOS') then
+    local checked = {}
+    for _, profile in ipairs(nix_profiles()) do
+      table.insert(checked, '  ' .. profile .. '/lib: ' .. (vim.uv.fs_stat(profile) and 'no librime' or 'missing'))
+    end
+    return 'Nix profiles:\n' .. table.concat(checked, '\n')
+      .. '\nInstall librime and rime-data (environment.systemPackages or home.packages), or set librime = path'
+  end
+  return 'Install librime (librime1, librime or brew install librime), or set librime = path'
+end
+
 local function shared_data_dir()
   local dir = config.options.shared_data_dir
   if dir then return vim.fs.normalize(dir) end
@@ -163,20 +171,8 @@ local function handle_event(kind, value)
     emit('RimeOption', { kind = kind, value = value })
     require('rime.mode').changed()
   elseif kind == 'error' then
-    if
-      value:find('cannot load librime', 1, true)
-      and not fetched
-      and config.options.auto_build
-      and vim.tbl_contains(native.missing_nix_links(), 'nix-librime')
-    then
-      -- On Nix without a usable librime: fetch it from nixpkgs (poll()
-      -- starts the build) and say nothing unless that fails too.
-      retry_fetch = true
-      return
-    end
-    if M.fetch_output and value:find('cannot load librime', 1, true) then
-      -- Why make could not fetch librime from nixpkgs.
-      value = value .. '\nFetching it from nixpkgs failed:\n' .. vim.trim(M.fetch_output)
+    if value:find('cannot load librime', 1, true) and not value:find('GLIBC', 1, true) then
+      value = value .. '\n' .. install_hint()
     end
     if value:find('GLIBC', 1, true) and value:find('/nix/store', 1, true) then
       -- Nix on another distribution: librime from Nix needs Nix's glibc.
@@ -210,21 +206,6 @@ local function poll()
     emit('RimeReady')
     require('rime.mode').changed()
     flush_waiters()
-  elseif retry_fetch then
-    retry_fetch = false
-    fetched = true
-    M.state = 'building'
-    notify('fetching librime from nixpkgs…')
-    native.build(function(ok, msg, output)
-      M.state = 'error'
-      if not ok then
-        M.error = msg
-        waiters = {}
-        return notify(msg, vim.log.levels.ERROR)
-      end
-      M.fetch_output = #native.missing_nix_links() > 0 and output or nil
-      M.start()
-    end, { 'NIX=1' })
   else
     M.state = state == 'error' and 'error' or 'stopped'
     waiters = {}
@@ -246,15 +227,10 @@ function M.start(on_ready)
   if M.state ~= 'stopped' and M.state ~= 'error' then return end
 
   local opts = config.options
-  local compile = not native.core and native.needs_build()
-  -- No Rime data anywhere: on Nix, have make fetch it from nixpkgs.
-  local fetch = not fetched and opts.auto_build and not shared_data_dir()
-    and vim.tbl_contains(native.missing_nix_links(), 'nix-rime-data')
-  if opts.auto_build and ((compile and not built) or fetch) then
+  if not native.core and not built and opts.auto_build and native.needs_build() then
     M.state = 'building'
-    if fetch then fetched = true end
-    notify(compile and 'building the native module…' or 'fetching librime from nixpkgs…')
-    native.build(function(ok, msg, output)
+    notify('building the native module…')
+    native.build(function(ok, msg)
       M.state = 'stopped'
       built = true
       if not ok then
@@ -263,9 +239,8 @@ function M.start(on_ready)
         waiters = {}
         return notify(msg, vim.log.levels.ERROR)
       end
-      M.fetch_output = #native.missing_nix_links() > 0 and output or nil
       M.start()
-    end, fetch and { 'NIX=1' } or nil)
+    end)
     return
   end
 
