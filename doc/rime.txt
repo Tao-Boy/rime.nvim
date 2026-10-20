@@ -43,14 +43,17 @@ again when its sources are newer, e.g. after an update.  `:Rime build`
 builds it by hand.  Run |:checkhealth| rime to check the installation.
 
                                                                     *rime-nix*
-On NixOS, install librime and rime-data with Nix, like Neovim: >nix
-    environment.systemPackages = with pkgs; [ neovim librime rime-data ];
-<
-They are found in the Nix profiles (NIX_PROFILES, ~/.nix-profile,
-/etc/profiles/per-user/$USER, /run/current-system/sw), else in /nix/store
-(e.g. when only fcitx5-rime brings them).  Without make and a C compiler,
-the module is built with `nix-shell -p gcc gnumake` or `nix shell`.  A
-Neovim that is not from Nix cannot load Nix's librime (another glibc).
+On NixOS nothing needs to be added to the system configuration.  On Nix,
+`make` fetches librime and rime-data from the system's nixpkgs
+(`nix-build '<nixpkgs>'`, else `nix build nixpkgs#...`) and links them as
+lib/nix-librime and lib/nix-rime-data, which are also garbage-collector
+roots; rime_core finds them next to itself.  `make NIX=0` skips this,
+`make NIXPKGS=...` selects another package set.  Without make and a C
+compiler, the module is built with `nix-shell -p gcc gnumake` or `nix shell`.
+
+A librime or rime-data already installed (Nix profiles, usual paths) is
+used first.  A Neovim that is not from Nix cannot load Nix's librime
+(another glibc).
 
 ==============================================================================
 3. USAGE                                                          *rime-usage*
@@ -139,8 +142,9 @@ Options of |rime.setup()|, with their defaults:
 
 shared_data_dir (string?)               nil
     Shared Rime data.  nil looks in $XDG_DATA_DIRS/rime-data, the Nix
-    profiles, /usr/share/rime-data, Homebrew and Squirrel, and last in the
-    newest rime-data of /nix/store.
+    profiles, /usr/share/rime-data, Homebrew and Squirrel, then the
+    rime-data the Makefile fetched from nixpkgs, and last the newest
+    rime-data of /nix/store.
 user_data_dir (string)                  stdpath('data') .. '/rime'
     User data: *.custom.yaml, user dictionaries, build/.  Keep it apart
     from a running desktop IME, whose user dictionary is locked.
@@ -149,8 +153,9 @@ log_level (string)                      'error'
     'info', 'warning', 'error' or 'fatal'.
 librime (string?)                       nil
     Path of the librime library.  nil tries, on NixOS or with a Neovim from
-    Nix, the Nix profiles first; then the usual names; and last the newest
-    librime of /nix/store.  See |rime-nix|.
+    Nix, the Nix profiles first; then the usual names; then the librime the
+    Makefile fetched from nixpkgs; and last the newest librime of
+    /nix/store.  See |rime-nix|.
 schema (string?)                        nil
     Schema selected once Rime is up.
 full_check (boolean)                    false
