@@ -9,13 +9,13 @@ CFLAGS ?= -O2
 WARN := -Wall -Wextra -Wno-unused-parameter
 
 ifeq ($(OS),Windows_NT)
-  TARGET := lib/rime_core.dll
+  TARGET ?= lib/rime_core.dll
   # Neovim on Windows links LuaJIT as lua51.dll; point LUA_LIB at it
   # (or at an import library) when it is not on the linker path.
   LUA_LIB ?= -llua51
   LDFLAGS_MODULE := -shared $(LUA_LIB)
 else
-  TARGET := lib/rime_core.so
+  TARGET ?= lib/rime_core.so
   UNAME_S := $(shell uname -s)
   ifeq ($(UNAME_S),Darwin)
     LDFLAGS_MODULE := -bundle -undefined dynamic_lookup
@@ -28,46 +28,24 @@ endif
 SRC := src/rime_core.c
 HDR := src/rime/rime_api.h src/lua/lua.h src/lua/lauxlib.h src/lua/luaconf.h
 
-# On Nix (NixOS, nix-darwin, Nix on another system), librime and the Rime
-# data are not where programs look for them.  Rather than having them
-# added to the system configuration, fetch them from nixpkgs here:
-# lib/nix-librime and lib/nix-rime-data link to their store paths (and
-# keep them from being garbage-collected), next to rime_core.so, which
-# looks there.  <nixpkgs> is the system's nixpkgs, whose glibc is the one
-# of the system's Neovim.  Done on NixOS, or on Nix when the system has no
-# librime; NIX=1 forces it, NIX=0 skips it; NIXPKGS selects another
-# package set (an expression for nix-build).
-HAVE_NIX := $(if $(wildcard /nix/store),$(shell command -v nix-build >/dev/null 2>&1 && echo 1))
-# Nix on another system with its own librime does not need this.
-NEED_NIX := $(if $(wildcard /etc/NIXOS),1,$(shell ldconfig -p 2>/dev/null | grep -q 'librime\.so\.1' || echo 1))
-NIX ?= $(if $(and $(HAVE_NIX),$(NEED_NIX)),1,0)
-NIXPKGS ?= <nixpkgs>
-NIX_LINKS := lib/nix-librime lib/nix-rime-data
+# A librime that pkg-config knows (librime-dev, or a shell or derivation
+# with librime on Nix) is compiled in as one more place to look for it.
+PKG_CONFIG ?= pkg-config
+RIME_LIBDIR ?= $(shell $(PKG_CONFIG) --variable=libdir rime 2>/dev/null)
+ifneq ($(RIME_LIBDIR),)
+  CFLAGS += -DRIME_LIBDIR='"$(RIME_LIBDIR)"'
+endif
 
 .PHONY: all clean
 
 all: $(TARGET)
-ifeq ($(NIX),1)
-all: $(NIX_LINKS)
-endif
-
-# Without <nixpkgs> in NIX_PATH, fall back to the flake registry's nixpkgs
-# (only when NIXPKGS was not chosen).  A failure (offline, ...) is not
-# fatal: rime_core still looks in the Nix profiles and in /nix/store.
-NIX_FALLBACK = $(if $(filter <nixpkgs>,$(NIXPKGS)),|| nix --extra-experimental-features 'nix-command flakes' build nixpkgs\#$* --out-link $@)
-
-lib/nix-%:
-	@mkdir -p lib
-	nix-build '$(NIXPKGS)' -A $* -o $@ --no-build-output >/dev/null \
-	  $(NIX_FALLBACK) \
-	  || echo 'warning: could not get $* from nixpkgs' >&2
 
 $(TARGET): $(SRC) $(HDR) Makefile
-	@mkdir -p lib
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(WARN) -std=c99 -o $@ $(SRC) $(LDFLAGS_MODULE) $(LDFLAGS)
 
 clean:
-	rm -f lib/rime_core.so lib/rime_core.dll $(wildcard lib/nix-*)
+	rm -f lib/rime_core.so lib/rime_core.dll
 
 .PHONY: test
 test: all

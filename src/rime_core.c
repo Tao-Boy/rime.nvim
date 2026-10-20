@@ -219,22 +219,6 @@ static int nix_store_find(const char *name, const char *sub, char *out,
 }
 #endif
 
-#ifndef _WIN32
-/* `<directory of rime_core>/<name>` in out, if it exists: the Makefile
- * links librime and the Rime data from nixpkgs there on Nix. */
-static int beside_module(const char *name, char *out, size_t size) {
-  Dl_info info;
-  char dir[PATH_SIZE], *slash;
-  /* g_mx lives in this module: find the file it comes from. */
-  if (!dladdr((void *)&g_mx, &info) || !info.dli_fname) return 0;
-  if (!realpath(info.dli_fname, dir)) return 0;
-  slash = strrchr(dir, '/');
-  if (!slash) return 0;
-  *slash = '\0';
-  if ((size_t)snprintf(out, size, "%s/%s", dir, name) >= size) return 0;
-  return access(out, R_OK) == 0;
-}
-#endif
 
 /* librime dlopen()s the plugins in <libdir>/rime-plugins when it starts.
  * Loading them first, with DLOPEN_FLAGS, makes librime reuse these
@@ -312,17 +296,14 @@ static int load_librime(void) {
 #else
 #define LIBRIME_FILE "/lib/librime.so.1"
 #endif
-    /* From nixpkgs by the Makefile, else the newest one in the store. */
-    if (!lib && access("/nix/store", F_OK) == 0) {
-      if (beside_module("nix-librime" LIBRIME_FILE, g_lib_path,
-                        sizeof g_lib_path)) {
-        if (!(lib = lib_open(g_lib_path))) NOTE(g_lib_path);
-      } else if (len < sizeof tried) {
-        len += (size_t)snprintf(tried + len, sizeof tried - len,
-                                "\n  %.1000s: missing (make fetches it on Nix)",
-                                g_lib_path);
-      }
+#ifdef RIME_LIBDIR
+    /* Where pkg-config found librime when this module was built. */
+    if (!lib) {
+      snprintf(g_lib_path, sizeof g_lib_path, "%s%s", RIME_LIBDIR,
+               &LIBRIME_FILE[4]); /* skip "/lib" */
+      if (!(lib = lib_open(g_lib_path))) NOTE(g_lib_path);
     }
+#endif
     if (!lib) {
       if (nix_store_find("librime", LIBRIME_FILE, g_lib_path,
                          sizeof g_lib_path)) {
@@ -382,8 +363,6 @@ static int bring_up(int full_check) {
   RimeTraits traits = {0};
 #ifndef _WIN32
   if (!g_shared_dir[0] &&
-      !beside_module("nix-rime-data/share/rime-data", g_shared_dir,
-                     sizeof g_shared_dir) &&
       !nix_store_find("rime-data", "/share/rime-data", g_shared_dir,
                       sizeof g_shared_dir))
     g_shared_dir[0] = '\0';
